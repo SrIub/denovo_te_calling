@@ -1,0 +1,153 @@
+#!/bin/bash
+script_dir="$(cd "$(dirname "$0")" && pwd -P)"
+
+usage() {
+    echo "Usage: bash $0 -s SAMPLE -l FQ1 -r FQ2 -i BAM -g REFERENCE -a ANNOTATION [options]"
+    echo ""
+    echo "Required:"
+    echo "  -s SAMPLE       Sample name (used for output file naming)"
+    echo "  -l FQ1          Path to trimmed R1 FASTQ"
+    echo "  -r FQ2          Path to trimmed R2 FASTQ"
+    echo "  -i BAM          Path to BAM file"
+    echo "  -g REFERENCE    Reference genome FASTA (full path including extension)"
+    echo "  -a ANNOTATION   TE annotation BED file (reference TEs to exclude)"
+    echo ""
+    echo "Optional:"
+    echo "  -e EUCHROMATIN  Euchromatin filter BED (if omitted, all regions are kept)"
+    echo "  -t THREADS      Threads (default: 4)"
+    echo "  -o OUTPUT       Output directory (default: SAMPLE-Calls)"
+    echo "  -w WINDOW       Flanking window size in bp for TE output (default: 500)"
+    echo "  -R CONSENSUS    TE consensus FASTA (default: bundled Dmel v10.2)"
+    echo "  -B BLAST_DB     BLAST db prefix (default: bundled Dmel v10.2)"
+    exit 1
+}
+
+# Defaults
+threads=4
+window=500
+consensus="${script_dir}/test_data/D_mel_transposon_sequence_set_v10.2.fa"
+blast_db="${script_dir}/test_data/consensus_db/D_mel_transposon_sequence_set_v10.2"
+temp2_output=""
+
+while getopts "s:l:r:i:g:a:e:t:o:w:R:B:" opt; do
+    case $opt in
+        s) sample="$OPTARG" ;;
+        l) fq_1="$OPTARG" ;;
+        r) fq_2="$OPTARG" ;;
+        i) bamfile="$OPTARG" ;;
+        g) reference="$OPTARG" ;;
+        a) annotation="$OPTARG" ;;
+        e) euchromatin_filter="$OPTARG" ;;
+        t) threads="$OPTARG" ;;
+        o) temp2_output="$OPTARG" ;;
+        w) window="$OPTARG" ;;
+        R) consensus="$OPTARG" ;;
+        B) blast_db="$OPTARG" ;;
+        *) usage ;;
+    esac
+done
+
+if [ -z "${sample:-}" ] || [ -z "${fq_1:-}" ] || [ -z "${fq_2:-}" ] || \
+   [ -z "${bamfile:-}" ] || [ -z "${reference:-}" ] || [ -z "${annotation:-}" ]; then
+    echo "Error: missing required argument(s)."
+    usage
+fi
+
+temp2_dir="${script_dir}/TEMP2/bin/TEMP2"
+temp2_output="${temp2_output:-${sample}-Calls}"
+tsv_output="${sample}_denovo_TEs.tsv"
+
+mkdir -p "$temp2_output"
+
+# TEMP2 germline TE calls
+SLURM_SUBMIT_DIR="$script_dir" bash "$temp2_dir" insertion2 \
+    -l "$fq_1" -r "$fq_2" \
+    -g "$reference" \
+    -i "$bamfile" \
+    -R "$consensus" \
+    -t "$annotation" \
+    -o "$temp2_output" \
+    -c "$threads"
+
+# Filter TEMP2 output
+base=$(basename "$fq_1"); base="${base%_*}"
+temp2_calls_file="${temp2_output}/${base}.insertion.bed"
+temp2_final_calls="${temp2_output}/${sample}_final_calls.bed"
+
+echo "Removing INE-1"
+sed -i "/INE-1/d" "$temp2_calls_file"
+
+current_calls="$temp2_calls_file"
+if [ -n "${euchromatin_filter:-}" ]; then
+    echo "Filtering to euchromatin"
+    bedtools intersect -a "$current_calls" -b "$euchromatin_filter" > "${temp2_output}/${sample}_euchrom_filtered.bed"
+    current_calls="${temp2_output}/${sample}_euchrom_filtered.bed"
+fi
+
+echo "Removing reference TEs"
+bedtools intersect -a "$current_calls" -b "$annotation" -v > "$temp2_final_calls"
+
+# Extract reads flanking each TE call
+python "${script_dir}/expand_flanks.py" "$temp2_final_calls" "${temp2_output}/expanded.bed"
+sort -k1,1 -k2,2n "${temp2_output}/expanded.bed" | bedtools merge -i - > "${temp2_output}/flanks.bed"
+echo "flanks.bed created"
+
+samtools view -@ "$threads" -bh -L "${temp2_output}/flanks.bed" "$bamfile" \
+    > "${temp2_output}/mapped_reads.bam"
+echo "TE flank mapped reads extracted"
+
+samtools view -@ "$threads" "${temp2_output}/mapped_reads.bam" \
+    | cut -f1 | sort -u > "${temp2_output}/read_names.txt"
+samtools view -@ "$threads" -bh -N "${temp2_output}/read_names.txt" "$bamfile" \
+    > "${temp2_output}/relevant_reads_unsorted.bam"
+samtools sort -@ "$threads" -o "${temp2_output}/relevant_reads.bam" \
+    "${temp2_output}/relevant_reads_unsorted.bam"
+samtools index -@ "$threads" "${temp2_output}/relevant_reads.bam"
+echo "All relevant reads extracted"
+
+# SPAdes assembly per TE locus
+mkdir -p "${temp2_output}/named_spades"
+while IFS=$'\t' read -r chrom pos1 pos2; do
+    bash "${script_dir}/single_TE.sub" \
+        "$chrom" "$pos1" "$pos2" \
+        "${temp2_output}/relevant_reads.bam" \
+        "${temp2_output}/named_spades" \
+        "$threads"
+done < "${temp2_output}/flanks.bed"
+echo "SPAdes assembly complete"
+
+# Align assembled contigs to reference
+python "${script_dir}/rename_contigs.py" \
+    "${temp2_output}/named_spades" \
+    "${temp2_output}/renamed_spades.fasta"
+minimap2 -x asm5 -c \
+    "${temp2_output}/renamed_spades.fasta" \
+    "$reference" \
+    -o "${temp2_output}/contig_vs_reference.paf"
+echo "minimap2 alignment complete"
+
+# BLAST TE candidates
+python "${script_dir}/read_minimap2.py" \
+    "${temp2_output}/contig_vs_reference.paf" \
+    "${temp2_output}/blast_candidates.txt"
+python "${script_dir}/extract_contigs.py" \
+    "${temp2_output}/blast_candidates.txt" \
+    "${temp2_output}/renamed_spades.fasta" \
+    "${temp2_output}/te_candidates.fasta"
+blastn -query "${temp2_output}/te_candidates.fasta" \
+    -db "$blast_db" \
+    -out "${temp2_output}/blast_contigs.out" \
+    -outfmt 6 \
+    -num_threads "$threads"
+
+python "${script_dir}/output_denovo_TEs.py" \
+    "${temp2_output}/blast_contigs.out" \
+    "$temp2_final_calls" \
+    "$sample" \
+    "$tsv_output" \
+    "$window"
+echo "${sample} de novo TE table written to: ${tsv_output}"
+
+rm -rf "$temp2_output"
+echo "Cleaned up"
+

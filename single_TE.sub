@@ -1,0 +1,28 @@
+#!/bin/bash
+
+chr=$1
+pos1=$2
+pos2=$3
+relevant_reads=$4
+output_dir=$5
+threads=$6
+
+te_ID="${chr}_${pos1}_${pos2}"
+te_dir="${output_dir}/${te_ID}"
+mkdir -p "$te_dir"
+
+
+# Mapped -> read names -> unmapped reads
+samtools view -@ $threads -b "$relevant_reads" "${chr}:${pos1}-${pos2}" > "${te_dir}/called_reads.bam"
+samtools view -@ $threads "${te_dir}/called_reads.bam" | cut -f1 | sort -u > "${te_dir}/called_readnames.txt"
+samtools view -@ $threads -b -N "${te_dir}/called_readnames.txt" "$relevant_reads" > "${te_dir}/te_reads_unsorted.bam"
+samtools sort -@ $threads -o "${te_dir}/te_reads.bam" "${te_dir}/te_reads_unsorted.bam"
+samtools index -@ $threads "${te_dir}/te_reads.bam"
+rm "${te_dir}/te_reads_unsorted.bam"
+
+# Convert to fastq for SPAdes
+samtools fastq -@ $threads -1 "${te_dir}/reads_R1.fastq.gz" -2 "${te_dir}/reads_R2.fastq.gz" -s "${te_dir}/reads_singleton.fastq.gz" -0 "${te_dir}/reads_other.fastq.gz" -n "${te_dir}/te_reads.bam"
+#samtools fastq -n "${te_dir}/te_reads.bam" > "${te_dir}/reads_singleton.fastq"
+
+mkdir -p "${te_dir}/spades"
+spades.py -1 "${te_dir}/reads_R1.fastq.gz" -2 "${te_dir}/reads_R2.fastq.gz" -s "${te_dir}/reads_singleton.fastq.gz" -o "${te_dir}/spades" --only-assembler -t $threads
