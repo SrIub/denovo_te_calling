@@ -18,7 +18,7 @@ conda activate denovo_te
 bash setup.sh
 ```
 
-> **Note:** On HPC clusters, conda may need to be initialized before use. This is typically done with `module load anaconda/miniconda` or by sourcing a conda init script. Contact your system administrator if `conda` is not found.
+> **Note:** On HPC clusters, conda may need to be initialized before use. This is typically done with `module load anaconda/miniconda` or by sourcing a conda init script.
 
 `setup.sh` clones TEMP2 from GitHub into the pipeline directory. It only needs to be run once.
 
@@ -42,10 +42,9 @@ makeblastdb -in your_consensus.fa -dbtype nucl -out your_consensus_db
 Input FASTQs should be adapter-trimmed (e.g. with Trim Galore) before running.
 
 ## Usage
-
 Run from within an active SLURM job with the conda environment activated:
-
 ```bash
+conda activate denovo_te
 bash denovo_te_calling.sub \
   -s SAMPLE \
   -l R1.fq \
