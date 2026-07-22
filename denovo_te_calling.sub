@@ -23,7 +23,7 @@ usage() {
 }
 
 # Defaults
-threads=4
+threads=1
 window=500
 consensus="${script_dir}/test_data/D_mel_transposon_sequence_set_v10.2.fa"
 blast_db="${script_dir}/test_data/consensus_db/D_mel_transposon_sequence_set_v10.2"
