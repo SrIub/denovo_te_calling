@@ -31,12 +31,18 @@ bwa index reference.fasta
 ```
 
 ### TE consensus and BLAST database
-If running on *D. melanogaster*, the bundled Dmel v10.2 consensus and BLAST database are used by default — no extra steps needed.
+The bundled *D. melanogaster* v10.2 consensus and BLAST database are used by default. **If your samples are *D. melanogaster*, no changes are needed here regardless of which reference genome you use.**
 
-For other species, provide your own consensus FASTA (`-R`) and a pre-built BLAST database (`-B`):
+For other species, provide your own consensus FASTA and build a matching BLAST database:
 ```bash
 makeblastdb -in your_consensus.fa -dbtype nucl -out your_consensus_db
 ```
+Then pass both `-R your_consensus.fa` and `-B your_consensus_db` together. See `test_data/D_mel_transposon_sequence_set_v10.2.fa` and `test_data/consensus_db/` for expected formats.
+
+### Euchromatic regions
+Most users will want to provide a euchromatin BED file (`-e`) to restrict calls to euchromatic regions and reduce heterochromatic false positives. Without it, calls from all genomic regions are retained.
+
+The BED file should list the euchromatic intervals for your reference genome (one region per line: `chr`, `start`, `end`). See `test_data/euchromatin.bed` for an example of the expected format.
 
 ### FASTQ files
 Input FASTQs should be adapter-trimmed (e.g. with Trim Galore) before running.
