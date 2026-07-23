@@ -100,3 +100,4 @@ A TSV file named `SAMPLE_denovo_TEs.tsv` with the following columns:
 - **INE-1 filtering:** INE-1 insertions are automatically removed from TEMP2 calls before downstream analysis, as they are abundant reference-strain insertions that frequently produce false positives.
 - **TEMP2 mode:** The pipeline runs TEMP2 in `insertion2` mode, which detects germline insertions only (not somatic).
 - **Cleanup:** Intermediate files are removed automatically after the TSV is written.
+- **Post-analysis filtering:** After running across multiple samples, insertions found at the same position in multiple samples are likely reference TEs missed by the annotation rather than true de novo events and should be removed.
